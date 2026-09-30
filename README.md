@@ -17,7 +17,7 @@ Sender ──email──▶ SendGrid ──HTTPS POST──▶ owlery-inbound-pa
 1. Your subdomain's MX record points at SendGrid (`mx.sendgrid.net`).
 2. SendGrid parses each incoming email and POSTs it as `multipart/form-data` to `/sendgrid/inbound`.
 3. The receiver checks the Basic Auth credentials in the URL and the sender's domain.
-4. It saves one row to the `inbound_emails` table and writes any attachments to `data/inbound-parse/<uuid>/`.
+4. It saves one row to the `inbound_emails` table and writes any attachments to `/data/inbound-parse/<uuid>/` (in the `owlery-data` Docker volume).
 5. If forwarding is configured, it sends the email on as `application/x-www-form-urlencoded`. Twilio Serverless can't parse multipart, so this receiver does it and passes the result along.
 
 ## Quickstart
@@ -43,7 +43,7 @@ set -a; source .env; set +a
 curl -u "inbound:$SENDGRID_INBOUND_BASIC_AUTH_PASS" \
   -F 'from=you@example.com' -F 'subject=hello' -F 'text=first message' \
   http://localhost:3000/sendgrid/inbound
-docker compose exec -T api bun src/cli.ts tail
+docker compose exec -T -u bun api bun src/cli.ts tail
 ```
 
 To receive real email, you also need an MX record, a public HTTPS URL, and a SendGrid route. See [Deploying](#deploying).
@@ -63,7 +63,7 @@ All settings are environment variables, read from `.env`. See [`.env.example`](.
 | `SENDGRID_INBOUND_ALLOWED_SENDER_DOMAINS` | Recommended | Comma-separated sender domains to accept, such as `yourcompany.com`. Empty accepts everyone. |
 | `TWILIO_FUNCTION_INBOUND_URL` / `_TOKEN` | No | Turns on forwarding to that URL with a Bearer token. |
 | `INBOUND_MAX_BODY_BYTES` | No | Largest request accepted, in bytes. Default 32 MB (SendGrid's own limit is 30 MB). |
-| `DB_PATH`, `INBOUND_ATTACHMENTS_DIR` | No | Where data is stored. Leave unset with Docker; the image uses `/data`. |
+| `DB_PATH`, `INBOUND_ATTACHMENTS_DIR` | No | Where data is stored. Leave unset with Docker; the image uses `/data`, which is the `owlery-data` volume. |
 
 ## Responses
 
@@ -86,7 +86,7 @@ bun src/cli.ts show <id>                 # one email, including its body
 bun src/cli.ts purge --older-than 30     # clear personal data from emails older than N days
 ```
 
-With Docker, prefix each one with `docker compose exec -T api`. The scheduled purge is `docker compose --profile cron run --rm inbound-purge`.
+With Docker, run them inside the running container, as the `bun` user: `docker compose exec -T -u bun api bun src/cli.ts purge --older-than 30`. Don't start a second container or open the database from the host: SQLite only stays consistent when one process at a time uses it.
 
 Purging clears the sender, recipient, subject, body, and any ID returned by a forward, and deletes the attachment folder. It keeps the row, marked `purged`, as a record that the email arrived.
 
@@ -104,7 +104,7 @@ bun run dev         # server with reload on http://localhost:3000
 - **Basic Auth is currently the only check that a request came from SendGrid.** Use a long random password. SendGrid can also sign Inbound Parse requests; checking that signature isn't implemented yet.
 - **The sender allowlist trusts the `From` header.** It keeps out casual mail but can be spoofed.
 - **Treat everything in an email as untrusted input,** including the body, HTML, and attachments. This receiver stores them and never renders or runs them. Anything downstream should do the same.
-- **Inbound email contains personal data.** Schedule `purge`, and keep `.env` and `data/` out of version control. The provided `.gitignore` already does this.
+- **Inbound email contains personal data.** Schedule `purge`, and keep `.env` and any local `data/` folder out of version control. The provided `.gitignore` already does this.
 
 ## License
 

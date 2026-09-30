@@ -131,14 +131,17 @@ set -a; source .env; set +a
 curl -u "inbound:$SENDGRID_INBOUND_BASIC_AUTH_PASS" \
   -F from=you@example.com -F subject=hi -F text=hello \
   http://localhost:3000/sendgrid/inbound      # {"ok":true,"id":1,...}
-docker compose exec -T api bun src/cli.ts tail
+docker compose exec -T -u bun api bun src/cli.ts tail
 ```
 
 Notes:
 
-- The database and attachments live in `./data` on the Mini, which the container sees as `/data`. The tables are created automatically on first start.
-- Leave `DB_PATH` and `INBOUND_ATTACHMENTS_DIR` unset in `.env` when you use Docker. The image already points them at `/data`. If you set `INBOUND_ATTACHMENTS_DIR=./data/...`, attachments end up inside the container and are lost when it's rebuilt.
-- Inside the container, files in `/data` show as owned by `root`. That's just how Docker Desktop displays shared folders. On the Mac they belong to your account, and the server itself runs as the unprivileged `bun` user.
+- **The database and attachments live in a Docker named volume, `owlery-data`,** which the container sees as `/data`. The tables are created automatically on first start. The volume survives `docker compose down` and rebuilds. `docker compose down -v` deletes it, and every saved email with it.
+- **Only the running container should ever open the database.** Always run CLI commands with `docker compose exec -T -u bun api …`.
+  > **Gotcha:** The first version of this setup used a folder shared from the Mac (`./data`). SQLite's file locking doesn't work reliably across Docker Desktop's macOS folder sharing. When a second process opened the database to clean up test rows, the server went on writing to deleted files: it logged two emails as saved, and they were lost. So don't mount a host folder at `/data`, don't open the database from the Mac with `sqlite3`, and never delete its `-wal` or `-shm` files.
+- To look at an attachment, copy it out: `docker compose cp api:/data/inbound-parse/<folder>/<file> .`
+- Leave `DB_PATH` and `INBOUND_ATTACHMENTS_DIR` unset in `.env` when you use Docker. The image already points them at `/data`. If you set `INBOUND_ATTACHMENTS_DIR=./data/...`, attachments end up outside the volume and are lost when the container is rebuilt.
+- The server runs as the unprivileged `bun` user. Pass `-u bun` to `docker compose exec`, as above. Without it, commands run as root and can leave files the server can't write.
 - If the build fails with a Bun error about `--production=false`, you have an old copy. Run `git pull`.
 
 ## Part 6: Make it reachable from the internet (Tailscale Funnel)
@@ -204,9 +207,9 @@ From an address on your allowlist, send an email to `anything@owlery.<yourdomain
 
 ```bash
 cd ~/owlery-inbound-parse
-docker compose exec -T api bun src/cli.ts tail
-docker compose exec -T api bun src/cli.ts show <id>
-ls data/inbound-parse/        # one folder per email that had attachments
+docker compose exec -T -u bun api bun src/cli.ts tail
+docker compose exec -T -u bun api bun src/cli.ts show <id>
+docker compose exec -T -u bun api ls /data/inbound-parse   # one folder per email that had attachments
 ```
 
 **Mail from a domain that isn't allowlisted is dropped on purpose,** so it won't appear. To test from a personal address, temporarily add its domain to `SENDGRID_INBOUND_ALLOWED_SENDER_DOMAINS`, run `docker compose up -d --force-recreate api`, and remove it again afterward.
@@ -220,7 +223,7 @@ docker compose ps
 tailscale funnel status
 ```
 
-**Daily PII purge.** This deletes the contents and attachments of emails older than 30 days, and keeps a record that each email arrived. The launchd job below hasn't been installed on the Owlery yet, so test it before you rely on it. Save it as `~/Library/LaunchAgents/dev.owlery.inbound-purge.plist`, replacing `<mini-user>`:
+**Daily PII purge.** This deletes the contents and attachments of emails older than 30 days, and keeps a record that each email arrived. It runs inside the already-running container, so only one process ever writes to the database. The launchd job below hasn't been installed on the Owlery yet, so test it before you rely on it. Save it as `~/Library/LaunchAgents/dev.owlery.inbound-purge.plist`, replacing `<mini-user>`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -232,7 +235,7 @@ tailscale funnel status
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>cd /Users/&lt;mini-user&gt;/owlery-inbound-parse &amp;&amp; /Users/&lt;mini-user&gt;/.docker/bin/docker compose --profile cron run --rm inbound-purge</string>
+    <string>cd /Users/&lt;mini-user&gt;/owlery-inbound-parse &amp;&amp; /Users/&lt;mini-user&gt;/.docker/bin/docker compose exec -T -u bun api bun src/cli.ts purge --older-than 30</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>17</integer></dict>
@@ -266,5 +269,7 @@ cat /tmp/inbound-purge.out /tmp/inbound-purge.err
 | Email sent, nothing in `tail` | MX, SendGrid route, allowlist, or password | `dig MX`; check the Inbound Parse entry; `docker compose logs api \| grep -E "rejected\|auth"` |
 | Receiver down after a restart | FileVault not unlocked, or Docker auto-start off | Log in at the Mini; Part 3, step 5 |
 | Attachments missing after a rebuild | `INBOUND_ATTACHMENTS_DIR` points outside `/data` | Remove it from `.env` (Part 5) |
+| Log says "Inbound email recorded" but `tail` doesn't show it | A second process opened the database, or `/data` is a folder shared from the Mac | Use the `owlery-data` volume; run CLI commands only with `docker compose exec -T -u bun api …` (Part 5) |
+| Every email and attachment gone | The volume was deleted with `docker compose down -v` | Use `docker compose down` without `-v` |
 
 In the logs, `Webhook auth rejected` means SendGrid's password doesn't match `.env`. `sender domain not allowlisted` means the allowlist dropped the email.

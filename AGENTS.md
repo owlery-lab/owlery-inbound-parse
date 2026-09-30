@@ -61,6 +61,8 @@ Run `bun test` and `bun run typecheck` before you finish any change. The Docker 
 - **Treat every email field and attachment as untrusted.** Don't render, run, or pass it into prompts without isolating it.
 - **Don't weaken these safety checks:** the `.env` symlink and permission checks in `config.ts`, the database directory symlink checks and `0700`/`0600` permissions in `core/db/index.ts`, the 503 when credentials are missing in production, the constant-time credential comparison, and the request-size limit (`INBOUND_MAX_BODY_BYTES`, enforced both by the route and by `Bun.serve`).
 - **The receiver in Docker runs as `bun`, not root.** `scripts/docker-entrypoint.sh` fixes ownership of `/data` (a fixed path, on purpose) and then switches users. Any new container command should go through that entrypoint.
+- **Only one process may open the live database.** Run CLI commands inside the running container with `docker compose exec -T -u bun api bun src/cli.ts ...`. Never open `/data/owlery-inbound.db` from a second container, from the host, or with the `sqlite3` tool while the server is running, and never delete its `-wal` or `-shm` files. Doing any of these once made the server keep writing to deleted files, so emails it reported as saved were lost.
+- **Keep `/data` on a Docker named volume** (`owlery-data` in `docker-compose.yml`). Don't switch it back to a folder shared from the host. SQLite's file locking doesn't work reliably across Docker Desktop's macOS and Windows folder sharing.
 
 ## Known limitations
 

@@ -85,7 +85,7 @@ SENDGRID_INBOUND_ALLOWED_SENDER_DOMAINS=example.com
 
 Replace `example.com` with the domain or domains you'll send test mail from, separated by commas. Empty accepts everyone, which is fine locally but not on a public URL.
 
-If you use Docker, leave `DB_PATH` and `INBOUND_ATTACHMENTS_DIR` unset. The image already points both at `/data`, which is where `./data` on the host is mounted.
+If you use Docker, leave `DB_PATH` and `INBOUND_ATTACHMENTS_DIR` unset. The image already points both at `/data`, which is a Docker named volume called `owlery-data`.
 
 Then start the receiver:
 
@@ -100,6 +100,12 @@ bun run dev
 ```
 
 The database tables are created automatically at startup. With Docker, the container's entrypoint starts as root, gives the unprivileged `bun` user ownership of `/data`, and then runs the server as that user.
+
+**Keep the database in the named volume, and let only the running container open it.** SQLite depends on file locking. Folders that Docker Desktop shares from macOS or Windows don't lock reliably. If a second process opens the database there, the server can report emails as saved while the writes are actually lost. So:
+
+- Run every CLI command inside the running container, as shown below.
+- Don't mount a host folder at `/data`.
+- Don't open the database file from the host or from a second container.
 
 Test it locally:
 
@@ -125,20 +131,22 @@ In SendGrid, go to **Settings → Inbound Parse → Add Host & URL** and fill in
 Send an email from an address on your allowlist to `anything@inbound.example.com`. Mail from any other domain is dropped on purpose. Then check that it arrived:
 
 ```bash
-docker compose exec -T api bun src/cli.ts tail
-docker compose exec -T api bun src/cli.ts show <id>
-ls data/inbound-parse/
+docker compose exec -T -u bun api bun src/cli.ts tail
+docker compose exec -T -u bun api bun src/cli.ts show <id>
+docker compose exec -T -u bun api ls /data/inbound-parse
 ```
+
+To copy an attachment out to the host, use `docker compose cp api:/data/inbound-parse/<folder>/<file> .`
 
 ## 6. Deleting old email data
 
 Inbound email contains personal data: sender addresses, subjects, and message bodies. The `purge` command clears those columns (and any ID returned by a forward), deletes the email's attachment folder, and marks the row `purged`. The row itself stays as a record that the email arrived.
 
 ```bash
-docker compose --profile cron run --rm inbound-purge    # purges emails older than 30 days
+docker compose exec -T -u bun api bun src/cli.ts purge --older-than 30
 ```
 
-Schedule it daily. [`SETUP-MAC-MINI.md`](SETUP-MAC-MINI.md) (Part 10) has a launchd example for macOS.
+Run it inside the running container, like the other commands, so only one process ever writes to the database. Schedule it daily. [`SETUP-MAC-MINI.md`](SETUP-MAC-MINI.md) (Part 10) has a launchd example for macOS.
 
 ## Forwarding to a Twilio Function
 

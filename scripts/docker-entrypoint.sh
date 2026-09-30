@@ -1,8 +1,7 @@
 #!/bin/sh
-# Starts as root, fixes ownership of the /data bind mount so the `bun` user
-# (uid 1000) can write SQLite and attachment files whatever the host mount's
-# owner is, then runs the real command as `bun`. On Docker Desktop for macOS the
-# mount already allows access, so the chown does nothing there.
+# Starts as root, makes sure the `bun` user (uid 1000) owns /data, then runs the
+# real command as `bun`. /data is normally a Docker named volume, which Docker
+# already creates owned by bun; the chown covers volumes created some other way.
 #
 # The path is fixed on purpose. Taking it from an environment variable would let
 # a misconfiguration make root recursively chown some other mounted directory.

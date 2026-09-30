@@ -26,15 +26,18 @@ COPY . .
 # Run a typecheck at build time so a broken image is caught early.
 RUN bun run typecheck
 
-# Create the persistent data directory and hand it to the bun user (uid 1000
-# in the oven/bun image). At runtime the entrypoint re-runs chown against the
-# host bind mount so a fresh volume works regardless of host ownership.
+# Create the data directory owned by the bun user (uid 1000 in the oven/bun
+# image). Docker copies this ownership into a new named volume the first time
+# it's mounted at /data.
 RUN mkdir -p /data && chown -R bun:bun /data && chmod 700 /data
 
 # Runtime: drop into production so Node ecosystem libs pick the prod path.
 ENV NODE_ENV=production
 
-# Stays root — the entrypoint fixes /data ownership and then drops to `bun`.
+# The server starts as root only so the entrypoint can fix /data ownership.
+# It then switches to `bun`. `docker compose exec` also defaults to root, so
+# run CLI commands with `-u bun` (as the docs show) to keep every database file
+# owned by bun.
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

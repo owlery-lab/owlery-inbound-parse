@@ -7,12 +7,18 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
-    # DB and attachments MUST live on a host bind-mount, not a named volume:
-    # src/core/db/index.ts refuses to start if the DB directory has a symlink
-    # in its ancestor chain, and it enforces 0o077 umask + 0700 chmod on
-    # first-boot. Bind mounts keep those permissions under our control.
+    # The database and attachments live in a Docker named volume, not a folder
+    # shared from the host. SQLite needs working file locks, and folders shared
+    # from macOS or Windows by Docker Desktop don't provide them reliably: a
+    # second process touching the database can make the server's writes vanish.
+    # A named volume lives inside Docker's own Linux filesystem, where locking
+    # works.
+    #
+    # Only this container should ever open the database. Run CLI commands in it
+    # with `docker compose exec -u bun api bun src/cli.ts ...`, never in a separate
+    # container or from the host.
     volumes:
-      - ./data:/data:rw
+      - owlery-data:/data
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3000/health"]
       interval: 30s
@@ -20,17 +26,5 @@ services:
       retries: 3
       start_period: 5s
 
-  # Nightly PII purge. Runs `owlery-inbound purge --older-than 30` inside a
-  # short-lived container that shares the same data volume. Started manually
-  # via `docker compose run --rm inbound-purge` from a host-side launchd
-  # trigger; not a long-running service.
-  inbound-purge:
-    image: owlery-inbound-parse:local
-    profiles: ["cron"]
-    env_file: .env
-    volumes:
-      - ./data:/data:rw
-    # Route through the same entrypoint so this runs as `bun` (uid 1000),
-    # matching the API service. Overriding entrypoint would leave root
-    # owning SQLite WAL/SHM sidecars and lock out the API.
-    command: ["bun", "src/cli.ts", "purge", "--older-than", "30"]
+volumes:
+  owlery-data:
