@@ -1,0 +1,19 @@
+# Keep secrets, local data, and anything the runtime doesn't need out of the image.
+.env
+.env.*
+!.env.example
+data
+node_modules
+.git
+.github
+.claude
+.DS_Store
+*.log
+tests
+docs
+coverage
+dist
+build
+Dockerfile
+docker-compose*.yml
+.dockerignore

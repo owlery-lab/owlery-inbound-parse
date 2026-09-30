@@ -1,0 +1,36 @@
+services:
+  api:
+    build: .
+    image: owlery-inbound-parse:local
+    container_name: owlery-inbound-parse
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    # DB and attachments MUST live on a host bind-mount, not a named volume:
+    # src/core/db/index.ts refuses to start if the DB directory has a symlink
+    # in its ancestor chain, and it enforces 0o077 umask + 0700 chmod on
+    # first-boot. Bind mounts keep those permissions under our control.
+    volumes:
+      - ./data:/data:rw
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Nightly PII purge. Runs `owlery-inbound purge --older-than 30` inside a
+  # short-lived container that shares the same data volume. Started manually
+  # via `docker compose run --rm inbound-purge` from a host-side launchd
+  # trigger; not a long-running service.
+  inbound-purge:
+    image: owlery-inbound-parse:local
+    profiles: ["cron"]
+    env_file: .env
+    volumes:
+      - ./data:/data:rw
+    # Route through the same entrypoint so this runs as `bun` (uid 1000),
+    # matching the API service. Overriding entrypoint would leave root
+    # owning SQLite WAL/SHM sidecars and lock out the API.
+    command: ["bun", "src/cli.ts", "purge", "--older-than", "30"]
