@@ -134,12 +134,34 @@ This has to be done through the SendGrid API, not the console. You need an API k
 
 **Do the steps in this order.** Until the key is set, the receiver ignores the signature headers. So attaching the policy first changes nothing, and turning on the check last means no mail arrives unsigned once checking is on.
 
-Run these from any machine, in one terminal session. Typing the API key at a prompt keeps it out of your shell history. The responses are saved in a private temporary folder (mode `0700`), because the Parse setting's `url` contains your Basic Auth password. If your account is in SendGrid's EU region, use `https://api.eu.sendgrid.com` instead of `https://api.sendgrid.com`.
+### The quick way: `scripts/sendgrid-signing.sh`
+
+The script does steps 1–4 below in that order. It asks for your API key at a hidden prompt, reuses a policy that's already attached instead of creating another, and never prints the Parse setting's `url`.
+
+On the receiver's host, from the repo folder:
 
 ```bash
-read -rs SENDGRID_API_KEY && export SENDGRID_API_KEY    # paste the key, press Enter
+scripts/sendgrid-signing.sh enable inbound.example.com --apply
+```
+
+With `--apply`, it also writes `SENDGRID_INBOUND_VERIFICATION_KEY` to `.env`, recreates the container, and waits until the log says verification is on. If the receiver doesn't confirm it, the script takes the key back out so mail keeps arriving. Without `--apply` (for example, on a laptop), it attaches the policy and prints the `.env` line for you to add on the host.
+
+Then send a real email (step 5) and run:
+
+```bash
+scripts/sendgrid-signing.sh check       # counts of recorded and rejected requests, with reasons; no email content
+```
+
+`scripts/sendgrid-signing.sh status inbound.example.com` shows what's attached, and `disable` undoes it (see [Rolling back](#rolling-back)). Set `SENDGRID_API_BASE=https://api.eu.sendgrid.com` for an EU-region account.
+
+### Step by step with curl
+
+The same thing, by hand. Run these from any machine, in one terminal session. Typing the API key at a prompt keeps it out of your shell history, and saving it as a header file keeps it out of curl's arguments, where other users of the machine could see it with `ps`. The key and the responses go in a private temporary folder (mode `0700`), because the Parse setting's `url` contains your Basic Auth password. If your account is in SendGrid's EU region, use `https://api.eu.sendgrid.com` instead of `https://api.sendgrid.com`.
+
+```bash
+WORK=$(mktemp -d)                                       # private folder for the key and responses
+read -rs KEY && printf 'Authorization: Bearer %s\n' "$KEY" > "$WORK/auth"; unset KEY   # paste the key, press Enter
 PARSE_HOST=inbound.example.com                          # your Receiving Domain from Step 4
-WORK=$(mktemp -d)                                       # private folder for the responses
 ```
 
 **1. Create a security policy that only signs.**
@@ -147,7 +169,7 @@ WORK=$(mktemp -d)                                       # private folder for the
 ```bash
 curl -sS --fail-with-body -o "$WORK/policy.json" \
   -X POST "https://api.sendgrid.com/v3/user/webhooks/security/policies" \
-  --header "Authorization: Bearer $SENDGRID_API_KEY" \
+  --header @"$WORK/auth" \
   --header "Content-Type: application/json" \
   --data '{"name": "owlery-inbound-parse", "signature": {"enabled": true}}' \
   && jq -e '{id: .policy.id, public_key: .policy.signature.public_key} | select(.id and .public_key)' "$WORK/policy.json" \
@@ -161,7 +183,7 @@ It prints the policy ID and the public key. The public key isn't secret; you'll 
 ```bash
 curl -sS --fail-with-body -o "$WORK/parse-setting.json" \
   "https://api.sendgrid.com/v3/user/webhooks/parse/settings/$PARSE_HOST" \
-  --header "Authorization: Bearer $SENDGRID_API_KEY" \
+  --header @"$WORK/auth" \
   && jq '{hostname, spam_check, send_raw, security_policy}' "$WORK/parse-setting.json" \
   || { echo "Parse setting not found:"; jq '.errors // "no error details"' "$WORK/parse-setting.json"; }
 ```
@@ -178,7 +200,7 @@ jq -en --slurpfile s "$WORK/parse-setting.json" --slurpfile p "$WORK/policy.json
   > "$WORK/patch.json" \
   && curl -sS --fail-with-body -o "$WORK/patched.json" \
        -X PATCH "https://api.sendgrid.com/v3/user/webhooks/parse/settings/$PARSE_HOST" \
-       --header "Authorization: Bearer $SENDGRID_API_KEY" \
+       --header @"$WORK/auth" \
        --header "Content-Type: application/json" \
        --data @"$WORK/patch.json" \
   && jq '{hostname, send_raw, security_policy}' "$WORK/patched.json" \
@@ -187,10 +209,10 @@ jq -en --slurpfile s "$WORK/parse-setting.json" --slurpfile p "$WORK/policy.json
 
 The output should show `security_policy` set to the policy ID from step 1. From now on, SendGrid adds the `X-Twilio-Email-Event-Webhook-Signature` and `X-Twilio-Email-Event-Webhook-Timestamp` headers to each request.
 
-When you're done with the API, delete the saved responses and forget the key:
+When you're done with the API, delete the saved key and responses:
 
 ```bash
-rm -rf "$WORK"; unset SENDGRID_API_KEY WORK
+rm -rf "$WORK"; unset WORK
 ```
 
 **4. Set the key on the receiver and restart it.** In `.env` on the host, add the `public_key` value from step 1 on one line:
@@ -225,34 +247,40 @@ A `Bad Request` with `signed body isn't multipart/form-data` in the log means th
 
 ### Rolling back
 
-Undo it in the reverse order, so no mail is rejected along the way.
+Undo it in the reverse order, so no mail is rejected along the way. On the receiver's host, the script does both steps:
+
+```bash
+scripts/sendgrid-signing.sh disable inbound.example.com --apply
+```
+
+By hand:
 
 1. Remove (or comment out) `SENDGRID_INBOUND_VERIFICATION_KEY` in `.env`, then run `docker compose up -d --force-recreate api`. The receiver goes back to checking Basic Auth only, and ignores any signature headers. This alone is a complete rollback.
 2. Optionally, detach the policy from the Parse setting:
 
    ```bash
-   read -rs SENDGRID_API_KEY && export SENDGRID_API_KEY    # paste the key, press Enter
-   PARSE_HOST=inbound.example.com
    WORK=$(mktemp -d)
+   read -rs KEY && printf 'Authorization: Bearer %s\n' "$KEY" > "$WORK/auth"; unset KEY   # paste the key, press Enter
+   PARSE_HOST=inbound.example.com
    SETTINGS="https://api.sendgrid.com/v3/user/webhooks/parse/settings/$PARSE_HOST"
 
    # Resend the current url, spam_check, and send_raw with security_policy set to null.
    # On failure this prints only SendGrid's error, never the saved setting (its url has the password).
    curl -sS --fail-with-body -o "$WORK/parse-setting.json" "$SETTINGS" \
-     --header "Authorization: Bearer $SENDGRID_API_KEY" \
+     --header @"$WORK/auth" \
      && jq -e 'select(.url) | {url, spam_check, send_raw, security_policy: null}' \
           "$WORK/parse-setting.json" > "$WORK/patch.json" \
      && curl -sS --fail-with-body -o "$WORK/patch-response.json" -X PATCH "$SETTINGS" \
-          --header "Authorization: Bearer $SENDGRID_API_KEY" \
+          --header @"$WORK/auth" \
           --header "Content-Type: application/json" \
           --data @"$WORK/patch.json" \
      || { echo "Detach failed:"; jq '.errors // "no error details"' "$WORK/patch-response.json" "$WORK/parse-setting.json" 2>/dev/null; }
 
    # Check the result.
-   curl -sS --fail-with-body "$SETTINGS" --header "Authorization: Bearer $SENDGRID_API_KEY" \
+   curl -sS --fail-with-body "$SETTINGS" --header @"$WORK/auth" \
      | jq '{hostname, spam_check, send_raw, security_policy}'
 
-   rm -rf "$WORK"; unset SENDGRID_API_KEY WORK SETTINGS
+   rm -rf "$WORK"; unset WORK SETTINGS
    ```
 
    SendGrid doesn't document how to detach a policy. Sending `null` is our best guess, so the last command checks it: `security_policy` should now be `null` or gone, and `spam_check` and `send_raw` should be unchanged. If the policy is still attached, leaving it is harmless once step 1 is done, because the receiver ignores the headers.

@@ -77,7 +77,12 @@ export function createInbound(overrides: Partial<InboundOptions> = {}): Hono {
   const verificationKey = opts.SENDGRID_INBOUND_VERIFICATION_KEY
     ? parseVerificationKey(opts.SENDGRID_INBOUND_VERIFICATION_KEY)
     : null;
-  if (!verificationKey && opts.NODE_ENV === "production") {
+  // scripts/sendgrid-signing.sh waits for one of these two lines after a restart.
+  if (verificationKey) {
+    logger.info("SendGrid signature verification enabled", {
+      toleranceSeconds: opts.SENDGRID_INBOUND_SIGNATURE_TOLERANCE_SECONDS,
+    });
+  } else if (opts.NODE_ENV === "production") {
     logger.warn("SENDGRID_INBOUND_VERIFICATION_KEY not set; SendGrid request signatures are NOT verified (Basic Auth only)");
   }
 

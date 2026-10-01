@@ -30,6 +30,7 @@ A single-purpose HTTP service. It receives SendGrid Inbound Parse webhooks, save
 | `src/core/db/index.ts` | SQLite connection, permission checks, and migration runner. |
 | `src/core/db/migrations/` | Numbered SQL migrations. |
 | `src/cli.ts` | `tail`, `show`, and `purge` commands. |
+| `scripts/sendgrid-signing.sh` | Turns signed webhooks on or off through the SendGrid API, optionally sets the key in `.env` and recreates the container, and summarizes the logs. Bash 3.2 compatible (macOS). Waits for the `SendGrid signature verification enabled` and `SENDGRID_INBOUND_VERIFICATION_KEY not set` startup lines, so keep those messages in step with it. Never prints the Parse setting's `url`, which has the Basic Auth password. |
 | `tests/` | Mirrors `src/`. `tests/setup.ts` sets test env vars. |
 | `docs/` | `SETUP-MAC-MINI.md` (step by step) and `DEPLOY.md` (any host). |
 

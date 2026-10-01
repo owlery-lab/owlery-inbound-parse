@@ -219,7 +219,13 @@ docker compose exec -T -u bun api ls /data/inbound-parse   # one folder per emai
 Do this after Part 9 works, so you know the route is good before you add another check. Once it's on, the receiver only accepts requests SendGrid signed, even if someone has the Basic Auth password.
 
 1. **Make sure the Mini's clock is synced.** Signed requests carry a timestamp, and the receiver rejects any more than 5 minutes off its own clock. In **System Settings → General → Date & Time**, turn on **Set time and date automatically**. Docker Desktop's VM takes its time from the Mac.
-2. **Create the policy and attach it to the route.** Follow steps 1–3 of [Turn on signed webhooks in `DEPLOY.md`](DEPLOY.md#5-turn-on-signed-webhooks). They're SendGrid API calls, so run them from your laptop, with your own API key and `PARSE_HOST=owlery.<yourdomain>`. Copy the `public_key` from step 1.
+2. **Create the policy and attach it to the route.** The script does this through the SendGrid API, asking for your API key at a hidden prompt. Run it from your laptop's clone of the repo, so the API key never touches the Mini:
+   ```bash
+   scripts/sendgrid-signing.sh enable owlery.<yourdomain>
+   ```
+   It prints a `SENDGRID_INBOUND_VERIFICATION_KEY=...` line for step 3. To do it by hand instead, follow steps 1–3 of [Turn on signed webhooks in `DEPLOY.md`](DEPLOY.md#5-turn-on-signed-webhooks) with `PARSE_HOST=owlery.<yourdomain>`.
+
+   Or do steps 2 and 3 together on the Mini: `cd ~/owlery-inbound-parse && git pull`, then `scripts/sendgrid-signing.sh enable owlery.<yourdomain> --apply`. That sets the key, recreates the container, and backs out if the receiver doesn't confirm verification is on. The API key is typed on the Mini but not saved there.
 3. **Set the key on the Mini and recreate the container:**
    ```bash
    cd ~/owlery-inbound-parse
@@ -232,10 +238,11 @@ Do this after Part 9 works, so you know the route is good before you add another
    ```bash
    docker compose exec -T -u bun api bun src/cli.ts tail
    docker compose logs --since 10m api | grep "signature check failed"   # should print nothing
+   scripts/sendgrid-signing.sh check                                     # or: counts by outcome and reason
    ```
    This real email is the test that matters. SendGrid's docs don't say outright that parsed mode, which this receiver uses, is signed, so only a real request proves it.
 
-**If the email didn't arrive,** remove the `SENDGRID_INBOUND_VERIFICATION_KEY` line from `.env` and run `docker compose up -d --force-recreate api` again. The receiver goes back to Basic Auth only right away. Then use the troubleshooting table below. [Rolling back in `DEPLOY.md`](DEPLOY.md#rolling-back) also shows how to detach the policy from the route.
+**If the email didn't arrive,** remove the `SENDGRID_INBOUND_VERIFICATION_KEY` line from `.env` and run `docker compose up -d --force-recreate api` again. The receiver goes back to Basic Auth only right away. (`scripts/sendgrid-signing.sh disable owlery.<yourdomain> --apply` on the Mini does that and also detaches the policy.) Then use the troubleshooting table below. [Rolling back in `DEPLOY.md`](DEPLOY.md#rolling-back) also shows how to detach the policy from the route.
 
 ## Part 11: Keep it running
 

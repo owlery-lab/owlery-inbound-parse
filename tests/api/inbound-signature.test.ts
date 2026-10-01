@@ -379,6 +379,18 @@ describe("when SENDGRID_INBOUND_VERIFICATION_KEY is unset", () => {
       SENDGRID_INBOUND_BASIC_AUTH_USER: "inbound", SENDGRID_INBOUND_BASIC_AUTH_PASS: "test-password" });
     expect(warnSpy.mock.calls.filter(([msg]) => String(msg).includes("SENDGRID_INBOUND_VERIFICATION_KEY")).length).toBe(0);
   });
+
+  test("logs that verification is on when a key is set, for scripts/sendgrid-signing.sh", () => {
+    const infoSpy = spyOn(logger, "info");
+    try {
+      createInbound({ SENDGRID_INBOUND_VERIFICATION_KEY: undefined });
+      expect(infoSpy.mock.calls.some(([msg]) => msg === "SendGrid signature verification enabled")).toBe(false);
+      createInbound({ SENDGRID_INBOUND_VERIFICATION_KEY: SENDGRID_KEY });
+      expect(infoSpy.mock.calls.some(([msg]) => msg === "SendGrid signature verification enabled")).toBe(true);
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
 });
 
 describe("parseVerificationKey", () => {
