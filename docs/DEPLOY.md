@@ -332,7 +332,7 @@ A failed forward never fails the response to SendGrid, and the receiver doesn't 
 
 - **Without signed webhooks, Basic Auth is the only check that a request really came from SendGrid.** Anyone who learns the URL and password can post. [Turn on signed webhooks](#5-turn-on-signed-webhooks), and still use a long random password and rotate it if it leaks.
 - **Signed requests can be replayed within the timestamp window.** A captured signed request is accepted again for up to `SENDGRID_INBOUND_SIGNATURE_TOLERANCE_SECONDS` (5 minutes by default). SendGrid doesn't specify a window; 5 minutes is our choice. Keep the host's clock synced, or real mail is rejected as `stale timestamp`.
-- **Size limit:** SendGrid rejects messages over 30 MB. The receiver rejects requests over `INBOUND_MAX_BODY_BYTES` (32 MB by default) with a 413 before reading them, and reads anything smaller fully into memory.
+- **Size limit:** SendGrid rejects messages over 30 MB. The receiver answers requests over `INBOUND_MAX_BODY_BYTES` (32 MB by default) with a 413. If the request declares a larger `Content-Length`, it's refused before any of the body is read. A chunked request without one is read and counted until it crosses the limit, then refused, so at most the limit is ever buffered. Anything under the limit is read fully into memory.
 - **Long filenames:** attachment names are cleaned and shortened to 100 characters, and prefixed with their position (`1-photo.png`).
 - **Several recipients:** `to` is stored exactly as SendGrid sends it, so it can list several addresses separated by commas.
 - **The allowlist checks the domain in the `From` header.** It stops casual mail, not someone deliberately faking a sender address.
