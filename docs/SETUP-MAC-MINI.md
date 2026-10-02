@@ -214,7 +214,37 @@ docker compose exec -T -u bun api ls /data/inbound-parse   # one folder per emai
 
 **Mail from a domain that isn't allowlisted is dropped on purpose,** so it won't appear. To test from a personal address, temporarily add its domain to `SENDGRID_INBOUND_ALLOWED_SENDER_DOMAINS`, run `docker compose up -d --force-recreate api`, and remove it again afterward.
 
-## Part 10: Keep it running
+## Part 10: Turn on signed webhooks
+
+Do this after Part 9 works, so you know the route is good before you add another check. Once it's on, the receiver only accepts requests SendGrid signed, even if someone has the Basic Auth password.
+
+1. **Make sure the Mini's clock is synced.** Signed requests carry a timestamp, and the receiver rejects any more than 5 minutes off its own clock. In **System Settings → General → Date & Time**, turn on **Set time and date automatically**. Docker Desktop's VM takes its time from the Mac.
+2. **Create the policy and attach it to the route.** The script does this through the SendGrid API, asking for your API key at a hidden prompt. Run it from your laptop's clone of the repo, so the API key never touches the Mini:
+   ```bash
+   scripts/sendgrid-signing.sh enable owlery.<yourdomain>
+   ```
+   It prints a `SENDGRID_INBOUND_VERIFICATION_KEY=...` line for step 3. To do it by hand instead, follow steps 1–3 of [Turn on signed webhooks in `DEPLOY.md`](DEPLOY.md#5-turn-on-signed-webhooks) with `PARSE_HOST=owlery.<yourdomain>`.
+
+   Or do steps 2 and 3 together on the Mini: `cd ~/owlery-inbound-parse && git pull`, then `scripts/sendgrid-signing.sh enable owlery.<yourdomain> --apply`. That sets the key, recreates the container, and backs out if the receiver doesn't confirm verification is on. The API key is typed on the Mini but not saved there.
+3. **Set the key on the Mini and recreate the container:**
+   ```bash
+   cd ~/owlery-inbound-parse
+   nano .env    # add: SENDGRID_INBOUND_VERIFICATION_KEY=<public_key>, on one line
+   docker compose up -d --force-recreate api
+   docker compose logs --tail 20 api
+   ```
+   If the key is malformed, the server refuses to start and says so in the log.
+4. **Send a real email** from an allowlisted address, as in Part 9, then check that it arrived and wasn't rejected:
+   ```bash
+   docker compose exec -T -u bun api bun src/cli.ts tail
+   docker compose logs --since 10m api | grep "signature check failed"   # should print nothing
+   scripts/sendgrid-signing.sh check                                     # or: counts by outcome and reason
+   ```
+   This real email is the test that matters. SendGrid's docs don't say outright that parsed mode, which this receiver uses, is signed, so only a real request proves it.
+
+**If the email didn't arrive,** remove the `SENDGRID_INBOUND_VERIFICATION_KEY` line from `.env` and run `docker compose up -d --force-recreate api` again. The receiver goes back to Basic Auth only right away. (`scripts/sendgrid-signing.sh disable owlery.<yourdomain> --apply` on the Mini does that and also detaches the policy.) Then use the troubleshooting table below. [Rolling back in `DEPLOY.md`](DEPLOY.md#rolling-back) also shows how to detach the policy from the route.
+
+## Part 11: Keep it running
 
 **After any restart,** the sequence is: unlock FileVault and log in → Docker Desktop starts (if auto-start is on) → the container restarts on its own → Funnel comes back on its own. To check:
 
@@ -271,5 +301,9 @@ cat /tmp/inbound-purge.out /tmp/inbound-purge.err
 | Attachments missing after a rebuild | `INBOUND_ATTACHMENTS_DIR` points outside `/data` | Remove it from `.env` (Part 5) |
 | Log says "Inbound email recorded" but `tail` doesn't show it | A second process opened the database, or `/data` is a folder shared from the Mac | Use the `owlery-data` volume; run CLI commands only with `docker compose exec -T -u bun api …` (Part 5) |
 | Every email and attachment gone | The volume was deleted with `docker compose down -v` | Use `docker compose down` without `-v` |
+| `signature check failed` with `"reason":"missing"` | The key is set, but the security policy isn't attached to the route | Attach it (Part 10, step 2), or unset the key |
+| `signature check failed` with `"reason":"bad signature"` | The key in `.env` isn't the one from the attached policy | Copy `public_key` again from the policy; recreate the container |
+| `signature check failed` with `"reason":"stale timestamp"` | The Mini's clock is off by more than 5 minutes | Part 10, step 1; check with `date -u` |
+| Server won't start: `SENDGRID_INBOUND_VERIFICATION_KEY is not a valid public key` | The key was pasted incompletely or split across lines | Paste the base64 value on one line |
 
-In the logs, `Webhook auth rejected` means SendGrid's password doesn't match `.env`. `sender domain not allowlisted` means the allowlist dropped the email.
+In the logs, `Webhook auth rejected` means SendGrid's password doesn't match `.env`. `signature check failed` means the Basic Auth password was right but SendGrid's signature wasn't, and the `reason` says why. `sender domain not allowlisted` means the allowlist dropped the email.
