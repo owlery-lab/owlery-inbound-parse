@@ -55,6 +55,14 @@ const envSchema = z.object({
   // SendGrid rejects messages over 30 MB, so 32 MB leaves room for multipart
   // overhead while stopping oversized requests before they're read into memory.
   INBOUND_MAX_BODY_BYTES: z.coerce.number().int().positive().default(32 * 1024 * 1024),
+  // SendGrid's public key from the Parse security policy. When set, every
+  // request needs a valid signature. Empty counts as unset.
+  SENDGRID_INBOUND_VERIFICATION_KEY: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().optional()
+  ),
+  // SendGrid doesn't publish a replay window; 5 minutes is our own choice.
+  SENDGRID_INBOUND_SIGNATURE_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
   TWILIO_FUNCTION_INBOUND_URL: z.string().url().optional(),
   TWILIO_FUNCTION_INBOUND_TOKEN: z.string().min(1).optional(),
 });
