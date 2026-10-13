@@ -8,7 +8,12 @@ import { migrate, closeDb } from "@/core/db/index.js";
 import { getInboundEmail } from "@/routines/inbound.js";
 import { config } from "@/shared/config.js";
 import { logger } from "@/shared/logger.js";
-import { parseVerificationKey, SIGNATURE_HEADER, TIMESTAMP_HEADER } from "@/shared/sendgrid-signature.js";
+import {
+  parseVerificationKey,
+  verifySendGridSignature,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+} from "@/shared/sendgrid-signature.js";
 
 // A key pair made for this test run, standing in for SendGrid's.
 const sendgrid = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
@@ -186,6 +191,25 @@ describe("signed Inbound Parse requests", () => {
       expect(res.status).toBe(401);
     }
     expect(rejectionReasons()).toEqual(["stale timestamp", "stale timestamp"]);
+  });
+
+  test("the window includes its boundary, whatever the milliseconds", () => {
+    const body = new TextEncoder().encode("body");
+    const ts = 1_700_000_000;
+    const check = (offsetSeconds: number, ms: number) =>
+      verifySendGridSignature({
+        key: parseVerificationKey(SENDGRID_KEY),
+        signature: sign(sendgrid.privateKey, String(ts), body),
+        timestamp: String(ts),
+        body,
+        toleranceSeconds: 300,
+        nowMs: (ts + offsetSeconds) * 1000 + ms,
+      });
+    // Exactly 300 seconds either way passes, even late in that second.
+    expect(check(300, 999)).toEqual({ ok: true });
+    expect(check(-300, 0)).toEqual({ ok: true });
+    expect(check(301, 0)).toEqual({ ok: false, reason: "stale timestamp" });
+    expect(check(-301, 0)).toEqual({ ok: false, reason: "stale timestamp" });
   });
 
   test("the replay window is configurable", async () => {

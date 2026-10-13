@@ -99,8 +99,13 @@ set_env_key() {
   mv "$tmp" "$ENV_FILE"
 }
 
-# Saves the api container's logs to $WORK/logs.txt.
-save_logs() { compose logs --no-log-prefix "$@" api > "$WORK/logs.txt" 2>/dev/null || true; }
+# Saves the api container's logs to $WORK/logs.txt, and fails if docker can't read them.
+save_logs() { compose logs --no-log-prefix "$@" api > "$WORK/logs.txt" 2> "$WORK/logs.err"; }
+
+cant_read_logs() {
+  cat "$WORK/logs.err" >&2
+  die "couldn't read the api container's logs; is Docker running? Try: docker compose ps"
+}
 
 logged() { grep -q "$1" "$WORK/logs.txt"; }
 
@@ -108,7 +113,7 @@ logged() { grep -q "$1" "$WORK/logs.txt"; }
 require_signature_support() {
   need docker
   make_work
-  save_logs
+  save_logs || cant_read_logs
   logged "signature verification enabled" || logged "$KEY_VAR not set" \
     || die "the running receiver doesn't log signature support. If it predates it, update first:
   git pull && docker compose up -d --build
@@ -122,7 +127,8 @@ recreate_api() {
   compose up -d --force-recreate api
   local i
   for i in $(seq 1 60); do
-    save_logs
+    # A read can fail while the container restarts; the loop's timeout covers that.
+    save_logs || : > "$WORK/logs.txt"
     if [ "$1" = on ] && logged "signature verification enabled"; then say "The receiver is verifying signatures."; return 0; fi
     if [ "$1" = off ] && logged "$KEY_VAR not set"; then say "The receiver is back to Basic Auth only."; return 0; fi
     if logged "$KEY_VAR is not a valid public key" || logged "$KEY_VAR must be"; then return 1; fi
@@ -243,7 +249,7 @@ cmd_check() {
   need docker
   need jq
   make_work
-  save_logs --since "$SINCE"
+  save_logs --since "$SINCE" || cant_read_logs
   say "Receiver log summary for the last $SINCE (no email content):"
   jq -Rrn '
     [inputs | fromjson? | select(type == "object") | {message: (.message // ""), reason}] as $l

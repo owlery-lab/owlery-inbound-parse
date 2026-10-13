@@ -72,8 +72,10 @@ export function verifySendGridSignature(check: SignatureCheck): SignatureResult 
   if (!valid) return { ok: false, reason: "bad signature" };
 
   // Unix seconds. Checked in both directions, so a clock running ahead fails too.
+  // Whole seconds on both sides, so the window includes its boundary.
   if (!/^\d{1,15}$/.test(timestamp)) return { ok: false, reason: "stale timestamp" };
-  const skewSeconds = Math.abs((check.nowMs ?? Date.now()) / 1000 - Number(timestamp));
+  const nowSeconds = Math.floor((check.nowMs ?? Date.now()) / 1000);
+  const skewSeconds = Math.abs(nowSeconds - Number(timestamp));
   if (skewSeconds > check.toleranceSeconds) return { ok: false, reason: "stale timestamp" };
 
   return { ok: true };
